@@ -87,7 +87,9 @@ class OutboxTest extends IntegrationTest {
 
         await().atMost(TIMEOUT).until(() -> deliveries(eventId) != null);
 
-        assertThat(jdbc.sql("SELECT published_at IS NOT NULL FROM outbox_events WHERE event_id = :id").param("id", eventId)
+        // Published, and after it was created: both stamps come from the DB clock (an earlier
+        // version mixed in the app's clock and recorded negative delays).
+        assertThat(jdbc.sql("SELECT published_at >= created_at FROM outbox_events WHERE event_id = :id").param("id", eventId)
                 .query(Boolean.class).single()).isTrue();
         assertThat(deliveries(eventId)).isEqualTo(1);
     }

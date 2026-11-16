@@ -1,6 +1,7 @@
 package io.github.bytekumar.ledger.outbox;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -17,6 +18,9 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
+
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Publishes outbox rows to Kafka, oldest first, then marks them published.
@@ -40,10 +44,16 @@ public class OutboxRelay {
     private final TransactionTemplate tx;
     private final int batchSize;
     private final long sendTimeoutMs;
+    private final Timer publishDelay;
 
     public OutboxRelay(OutboxRepository outbox, KafkaTemplate<String, String> kafka, TransactionTemplate tx,
                        @Value("${ledger.outbox.relay.batch-size:500}") int batchSize,
-                       @Value("${ledger.outbox.relay.send-timeout-ms:15000}") long sendTimeoutMs) {
+                       @Value("${ledger.outbox.relay.send-timeout-ms:15000}") long sendTimeoutMs,
+                       MeterRegistry registry) {
+        this.publishDelay = Timer.builder("ledger.outbox.publish.delay")
+                .description("Time from the transfer committing its event to Kafka acknowledging it")
+                .publishPercentileHistogram()
+                .register(registry);
         this.outbox = outbox;
         this.kafka = kafka;
         this.tx = tx;
@@ -74,7 +84,10 @@ public class OutboxRelay {
             for (CompletableFuture<SendResult<String, String>> ack : acks) {
                 awaitAck(ack); // throws -> transaction rolls back -> whole batch retried later
             }
-            outbox.markPublished(batch.stream().map(OutboxEvent::id).toList());
+            List<Double> waitedSeconds = outbox.markPublished(batch.stream().map(OutboxEvent::id).toList());
+            for (double seconds : waitedSeconds) {
+                publishDelay.record(Duration.ofNanos((long) (seconds * 1e9)));
+            }
             return batch.size();
         });
         return sent == null ? 0 : sent;

@@ -1,8 +1,11 @@
 package io.github.bytekumar.ledger.transfer;
 
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -18,6 +21,7 @@ import io.github.bytekumar.ledger.outbox.TransferCompletedEvent;
 import io.github.bytekumar.ledger.transfer.TransferRejectedException.Reason;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 /**
  * Moves money between two accounts.
@@ -44,6 +48,8 @@ public class TransferService {
     private final LockingMode locking;
     private final Counter versionConflictRetries;
     private final Counter idempotencyRaceRetries;
+    private final MeterRegistry registry;
+    private final Map<String, Timer> latencyTimers = new ConcurrentHashMap<>();
 
     public TransferService(AccountRepository accounts, TransferRepository transfers, OutboxRepository outbox,
                            ObjectMapper json, TransactionTemplate tx, TransferProperties props, MeterRegistry registry) {
@@ -54,6 +60,7 @@ public class TransferService {
         this.tx = tx;
         this.maxAttempts = props.maxAttempts();
         this.locking = props.locking();
+        this.registry = registry;
         this.versionConflictRetries = Counter.builder("ledger.transfer.retries").tag("reason", "version_conflict")
                 .description("Transfer attempts rolled back and retried").register(registry);
         this.idempotencyRaceRetries = Counter.builder("ledger.transfer.retries").tag("reason", "idempotency_race")
@@ -67,7 +74,38 @@ public class TransferService {
         return transfers.findById(id);
     }
 
+    /** Times the whole call (all attempts and backoff) and tags it with how it ended. */
     public Outcome transfer(TransferCommand cmd) {
+        long start = System.nanoTime();
+        String outcome = "error";
+        try {
+            Outcome out = transferWithRetries(cmd);
+            outcome = out.replayed() ? "replayed" : "created";
+            return out;
+        } catch (TransferRejectedException e) {
+            outcome = "rejected";
+            throw e;
+        } catch (AccountNotFoundException e) {
+            outcome = "not_found";
+            throw e;
+        } catch (ConcurrencyConflictException e) {
+            outcome = "gave_up";
+            throw e;
+        } finally {
+            latencyTimer(outcome).record(System.nanoTime() - start, TimeUnit.NANOSECONDS);
+        }
+    }
+
+    private Timer latencyTimer(String outcome) {
+        return latencyTimers.computeIfAbsent(outcome, o -> Timer.builder("ledger.transfer.latency")
+                .description("Time to complete POST /transfers in the service, including retries")
+                .tag("mode", locking.name().toLowerCase())
+                .tag("outcome", o)
+                .publishPercentileHistogram() // exports buckets so Prometheus can compute p95/p99
+                .register(registry));
+    }
+
+    private Outcome transferWithRetries(TransferCommand cmd) {
         if (cmd.from() == cmd.to()) {
             throw new TransferRejectedException(Reason.SAME_ACCOUNT, "from and to must be different accounts");
         }

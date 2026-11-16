@@ -40,9 +40,30 @@ public class OutboxRepository {
                 .list();
     }
 
-    public void markPublished(List<Long> ids) {
-        jdbc.sql("UPDATE outbox_events SET published_at = now() WHERE id IN (:ids)")
+    /** Backlog size: committed events not yet on Kafka. Uses the partial index. */
+    public long countUnpublished() {
+        return jdbc.sql("SELECT count(*) FROM outbox_events WHERE published_at IS NULL").query(Long.class).single();
+    }
+
+    /** How long the oldest unpublished event has been waiting; 0 when the backlog is empty. */
+    public double oldestUnpublishedAgeSeconds() {
+        return jdbc.sql("SELECT coalesce(extract(epoch FROM now() - min(created_at)), 0)::float8"
+                        + " FROM outbox_events WHERE published_at IS NULL")
+                .query(Double.class).single();
+    }
+
+    /**
+     * Marks the rows published and returns, per row, how long it waited (in seconds).
+     * Both timestamps come from the database clock: mixing the DB clock (created_at) with
+     * the app's clock gave negative delays when the two machines' clocks differed.
+     * clock_timestamp() is the real time now; now() would be when this transaction began,
+     * before the Kafka sends, and would understate the delay.
+     */
+    public List<Double> markPublished(List<Long> ids) {
+        return jdbc.sql("UPDATE outbox_events SET published_at = clock_timestamp() WHERE id IN (:ids)"
+                        + " RETURNING extract(epoch FROM published_at - created_at)::float8")
                 .param("ids", ids)
-                .update();
+                .query(Double.class)
+                .list();
     }
 }
