@@ -35,6 +35,17 @@ public class AccountRepository {
     }
 
     /**
+     * Pessimistic read: also takes the row lock, held until the transaction ends. Any other
+     * transaction that wants to lock or update this account waits here instead of failing.
+     */
+    public Optional<Account> findByIdForUpdate(long id) {
+        return jdbc.sql("SELECT " + ACCOUNT_COLUMNS + " FROM accounts WHERE id = :id FOR UPDATE")
+                .param("id", id)
+                .query(Account.class)
+                .optional();
+    }
+
+    /**
      * Adds to the balance in one atomic statement and returns the new balance.
      * Postgres row-locks the account until the transaction ends, and the version bump
      * makes any concurrent optimistic transfer on this account retry.

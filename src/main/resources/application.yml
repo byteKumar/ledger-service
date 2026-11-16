@@ -18,3 +18,10 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+
+ledger:
+  transfer:
+    # optimistic | pessimistic   (env: LEDGER_TRANSFER_LOCKING)
+    locking: optimistic
+    # Attempts per transfer before giving up with 503 (optimistic mode retries on version conflicts).
+    max-attempts: 10

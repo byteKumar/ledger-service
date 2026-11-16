@@ -102,6 +102,7 @@ class TransferConcurrencyTest extends IntegrationTest {
             commands.add(new TransferCommand(from, to, 1 + rnd.nextInt(5_000), "USD", "key-" + i));
         }
         double retriesBefore = retries();
+        double versionRetriesBefore = versionConflictRetries();
 
         AtomicInteger created = new AtomicInteger();
         AtomicInteger replayed = new AtomicInteger();
@@ -141,14 +142,27 @@ class TransferConcurrencyTest extends IntegrationTest {
         long accountsNotMatchingEntries = jdbc.sql("SELECT count(*) FROM accounts a WHERE a.balance <>"
                 + " (SELECT coalesce(sum(e.amount), 0) FROM entries e WHERE e.account_id = a.id)").query(Long.class).single();
 
-        System.out.printf("concurrency test: created=%d replayed=%d insufficient=%d gaveUp=%d retries=%.0f%n",
-                created.get(), replayed.get(), insufficient.get(), gaveUp.get(), retries() - retriesBefore);
+        double versionRetries = versionConflictRetries() - versionRetriesBefore;
+        System.out.printf("concurrency test [%s]: created=%d replayed=%d insufficient=%d gaveUp=%d retries=%.0f (version conflicts %.0f)%n",
+                transfers.lockingMode(), created.get(), replayed.get(), insufficient.get(), gaveUp.get(),
+                retries() - retriesBefore, versionRetries);
 
         assertThat(created.get() + replayed.get() + insufficient.get() + gaveUp.get()).isEqualTo(transferCount);
         assertThat(sumBalances).isEqualTo(sumDeposits);
         assertThat(transferRows).isEqualTo(created.get());
         assertThat(unbalancedTransfers).isZero();
         assertThat(accountsNotMatchingEntries).isZero();
+        assertModeSpecific(gaveUp.get(), versionRetries);
+    }
+
+    /** Optimistic mode may retry and even give up under this much contention; that's measured, not asserted. */
+    protected void assertModeSpecific(int gaveUp, double versionConflictRetries) {
+        assertThat(transfers.lockingMode()).isEqualTo(LockingMode.OPTIMISTIC);
+    }
+
+    private double versionConflictRetries() {
+        var counter = registry.find("ledger.transfer.retries").tag("reason", "version_conflict").counter();
+        return counter == null ? 0 : counter.count();
     }
 
     private double retries() {

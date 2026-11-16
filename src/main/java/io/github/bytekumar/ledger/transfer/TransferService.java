@@ -14,11 +14,17 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 
 /**
- * Moves money between two accounts with optimistic locking.
+ * Moves money between two accounts.
  *
- * Each attempt is its own database transaction. If another transaction changed one of our
- * accounts after we read it, the version check fails, the attempt rolls back (nothing was
- * written), and we retry with fresh data, up to ledger.transfer.max-attempts times.
+ * Each attempt is its own database transaction. OPTIMISTIC (default): if another transaction
+ * changed one of our accounts after we read it, the version check fails, the attempt rolls
+ * back (nothing was written), and we retry with fresh data, up to ledger.transfer.max-attempts
+ * times. PESSIMISTIC: the reads lock both rows, so concurrent transfers queue up on the locks
+ * and the version check can't fail.
+ *
+ * Lock order in PESSIMISTIC mode is accounts, then idempotency key; in OPTIMISTIC mode it is
+ * key, then accounts. That's fine within one mode, but two instances in different modes
+ * racing on the same key could deadlock (Postgres would abort one), so don't mix modes.
  */
 @Service
 public class TransferService {
@@ -27,6 +33,7 @@ public class TransferService {
     private final TransferRepository transfers;
     private final TransactionTemplate tx;
     private final int maxAttempts;
+    private final LockingMode locking;
     private final Counter versionConflictRetries;
     private final Counter idempotencyRaceRetries;
 
@@ -36,6 +43,7 @@ public class TransferService {
         this.transfers = transfers;
         this.tx = tx;
         this.maxAttempts = props.maxAttempts();
+        this.locking = props.locking();
         this.versionConflictRetries = Counter.builder("ledger.transfer.retries").tag("reason", "version_conflict")
                 .description("Transfer attempts rolled back and retried").register(registry);
         this.idempotencyRaceRetries = Counter.builder("ledger.transfer.retries").tag("reason", "idempotency_race")
@@ -74,8 +82,12 @@ public class TransferService {
             return replay(existing.get(), cmd);
         }
 
-        Account from = accounts.findById(cmd.from()).orElseThrow(() -> new AccountNotFoundException(cmd.from()));
-        Account to = accounts.findById(cmd.to()).orElseThrow(() -> new AccountNotFoundException(cmd.to()));
+        // Read both accounts, lower id first. In PESSIMISTIC mode these reads take the row
+        // locks, so the same ordering rule as the writes below prevents deadlocks.
+        Account low = read(Math.min(cmd.from(), cmd.to()));
+        Account high = read(Math.max(cmd.from(), cmd.to()));
+        Account from = low.id() == cmd.from() ? low : high;
+        Account to = from == low ? high : low;
 
         // 2. Claim the key. Done before the business checks so that a duplicate racing with
         //    the original waits here and then replays, instead of being judged on a balance
@@ -96,16 +108,28 @@ public class TransferService {
         // 4. Write both balances, lower account id first. Postgres row-locks each updated row
         //    until commit; a fixed order means two transfers over the same pair of accounts
         //    can never each hold one lock while waiting for the other (deadlock).
-        Account first = from.id() < to.id() ? from : to;
-        Account second = first == from ? to : from;
-        long firstDelta = first == from ? -cmd.amount() : cmd.amount();
-        updateOrConflict(first, firstDelta);
-        updateOrConflict(second, -firstDelta);
+        //    Both modes use the same versioned UPDATE. In PESSIMISTIC mode we already hold the
+        //    locks, so the version check always passes; it still bumps the version, so
+        //    deposits and optimistic readers see the change.
+        long lowDelta = low == from ? -cmd.amount() : cmd.amount();
+        updateOrConflict(low, lowDelta);
+        updateOrConflict(high, -lowDelta);
 
         // 5. Double entry: one debit and one credit that sum to zero.
         accounts.insertEntry(from.id(), -cmd.amount(), from.balance() - cmd.amount(), null, transfer.id());
         accounts.insertEntry(to.id(), cmd.amount(), to.balance() + cmd.amount(), null, transfer.id());
         return new Outcome(transfer, false);
+    }
+
+    private Account read(long id) {
+        Optional<Account> account = locking == LockingMode.PESSIMISTIC
+                ? accounts.findByIdForUpdate(id)
+                : accounts.findById(id);
+        return account.orElseThrow(() -> new AccountNotFoundException(id));
+    }
+
+    public LockingMode lockingMode() {
+        return locking;
     }
 
     private void updateOrConflict(Account account, long delta) {
