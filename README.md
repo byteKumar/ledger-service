@@ -19,15 +19,14 @@ All numbers are measured, not estimated. Details, raw data and caveats are in [R
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TD
     client["Client or k6"] -->|"POST /transfers"| api["Spring Boot API<br/>TransferService"]
-    api -->|"one transaction: transfer row,<br/>2 entries, 2 balances, outbox row"| pg[("PostgreSQL 14")]
-    relay["Outbox relay<br/>polls every 100 ms"] -->|"lock unpublished rows<br/>FOR UPDATE SKIP LOCKED"| pg
-    relay -->|"send batch, wait for acks"| kafka[["Kafka topic<br/>ledger.transfers"]]
-    relay -->|"mark published"| pg
+    ops["Operator or Prometheus"] -->|"/admin/reconcile<br/>/actuator/prometheus"| api
+    api -->|"one transaction:<br/>transfer, 2 entries,<br/>2 balances, outbox row"| pg[("PostgreSQL 14")]
+    relay["Outbox relay<br/>polls every 100 ms"] -->|"lock unpublished rows,<br/>then mark published"| pg
+    relay -->|"send batch,<br/>wait for acks"| kafka[["Kafka topic<br/>ledger.transfers"]]
     kafka --> consumer["Example consumer"]
-    consumer -->|"dedupe by event_id<br/>INSERT ON CONFLICT"| processed[("consumer_processed_events")]
-    ops["Operator or Prometheus"] -->|"GET /admin/reconcile<br/>GET /actuator/prometheus"| api
+    consumer -->|"dedupe by event_id"| processed[("consumer_processed_events")]
 ```
 
 The relay runs inside the API process by default. With `ledger.outbox.relay.enabled=false` it runs as its own process, which is how the relay-kill test works.
@@ -35,12 +34,17 @@ The relay runs inside the API process by default. With `ledger.outbox.relay.enab
 How one transfer attempt runs (one database transaction, retried if it loses an optimistic race):
 
 ```
-1. key already used?                  -> return the original (409 if the body differs)
-2. read both accounts, lower id first   (FOR UPDATE in pessimistic mode)
-3. INSERT transfer ON CONFLICT (idempotency_key) DO NOTHING
-                                      -> a racing duplicate waits here, then replays
-4. currency and funds checks          -> 422, everything rolls back
-5. UPDATE accounts ... WHERE version = ?  (lower id first; 0 rows -> roll back, retry)
+1. key already used?      -> return the original
+                             (409 if the body differs)
+2. read both accounts, lower id first
+                             (FOR UPDATE in pessimistic mode)
+3. INSERT transfer ON CONFLICT (idempotency_key)
+                          -> a racing duplicate waits,
+                             then replays
+4. currency, funds checks -> 422, all rolls back
+5. UPDATE accounts ... WHERE version = ?
+                             (lower id first;
+                              0 rows -> roll back, retry)
 6. INSERT 2 entries (-amount, +amount)
 7. INSERT outbox event
 ```
