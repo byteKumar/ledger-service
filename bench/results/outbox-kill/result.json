@@ -1,0 +1,13 @@
+{
+  "rate": 500, "accounts": 1000, "killAtSeconds": 20, "restartAtSeconds": 35,
+  "transfersCommitted": 30000,
+  "outboxEvents": 30000,
+  "eventsMarkedPublished": 30000,
+  "eventsStillPending": 0,
+  "maxPendingDuringRun": 8335,
+  "messagesOnTopic": 30000,
+  "consumerDistinctEvents": 30000,
+  "consumerDedupes": 0,
+  "committedTransfersNeverConsumed": 0,
+  "reconcileHttpStatus": 200
+}

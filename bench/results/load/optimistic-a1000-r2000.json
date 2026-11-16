@@ -1,0 +1,15 @@
+{
+  "targetRate": 2000,
+  "accounts": 1000,
+  "durationSeconds": 60,
+  "requests": 119152,
+  "requestsPerSecond": 1985.9,
+  "transfersCreated": 119152,
+  "transfersPerSecond": 1985.9,
+  "droppedIterations": 849,
+  "errorRatePercent": 0,
+  "p50ms": 0.51,
+  "p95ms": 89.86,
+  "p99ms": 312.92,
+  "maxms": 813.13
+}

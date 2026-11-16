@@ -7,6 +7,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -48,6 +49,7 @@ public class TransferService {
     private final LockingMode locking;
     private final Counter versionConflictRetries;
     private final Counter idempotencyRaceRetries;
+    private final Counter postgresBugRetries;
     private final MeterRegistry registry;
     private final Map<String, Timer> latencyTimers = new ConcurrentHashMap<>();
 
@@ -64,6 +66,8 @@ public class TransferService {
         this.versionConflictRetries = Counter.builder("ledger.transfer.retries").tag("reason", "version_conflict")
                 .description("Transfer attempts rolled back and retried").register(registry);
         this.idempotencyRaceRetries = Counter.builder("ledger.transfer.retries").tag("reason", "idempotency_race")
+                .description("Transfer attempts rolled back and retried").register(registry);
+        this.postgresBugRetries = Counter.builder("ledger.transfer.retries").tag("reason", "postgres_multixact_bug")
                 .description("Transfer attempts rolled back and retried").register(registry);
     }
 
@@ -118,6 +122,16 @@ public class TransferService {
                     throw new ConcurrencyConflictException(attempt);
                 }
                 (e.versionConflict ? versionConflictRetries : idempotencyRaceRetries).increment();
+                backoff(attempt);
+            } catch (DataAccessException e) {
+                // The attempt already rolled back. Retry only the one known Postgres bug.
+                if (!PostgresTransientErrors.isMultixactBug(e)) {
+                    throw e;
+                }
+                if (attempt >= maxAttempts) {
+                    throw new ConcurrencyConflictException(attempt);
+                }
+                postgresBugRetries.increment();
                 backoff(attempt);
             }
         }

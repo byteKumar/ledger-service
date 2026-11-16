@@ -1,0 +1,1 @@
+LOADRESULT {"targetRate":500,"accounts":1000,"durationSeconds":60,"requests":30000,"requestsPerSecond":500,"transfersCreated":30000,"transfersPerSecond":500,"droppedIterations":0,"errorRatePercent":0,"p50ms":1.46,"p95ms":5.71,"p99ms":31.11,"maxms":140.25}

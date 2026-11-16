@@ -9,7 +9,7 @@ Java 21 · Spring Boot 3.5 · PostgreSQL 14 · Flyway · Kafka 4 · Micrometer/P
 - **Accounts:** create, read balance, list the entry history (cursor-paginated, newest first). Deposits bring money in from outside.
 - **Transfers:** `POST /transfers {from, to, amount, currency, idempotencyKey}` writes one debit entry and one credit entry and updates both balances in one transaction.
   - **Idempotent:** the same key returns the original transfer (`200`, `Idempotent-Replayed: true`) and never moves money again. The same key with a different body returns `409`.
-  - **Concurrency control:** optimistic locking (a `version` column, bounded retry with jittered backoff, `503` + `Retry-After` when it gives up) or pessimistic `SELECT … FOR UPDATE`, chosen with `ledger.transfer.locking`. Accounts are always locked or updated lowest id first, so transfers can't deadlock.
+  - **Concurrency control:** optimistic locking (a `version` column, bounded retry with jittered backoff, `503` + `Retry-After` when it gives up) or pessimistic `SELECT … FOR UPDATE`, chosen with `ledger.transfer.locking`. Accounts are always locked or updated lowest id first, so transfers can't deadlock. One known Postgres 14 internal error that optimistic contention triggers is also retried (see RESULTS.md).
   - Insufficient funds and currency mismatches return `422`, and nothing is written.
 - **Transactional outbox:** each transfer inserts a `TransferCompleted` event in the same transaction. A relay publishes events to Kafka (`ledger.transfers`) and then marks them sent. Delivery is at least once. The example consumer dedupes by event id.
 - **Reconciliation:** `GET /admin/reconcile` checks, per currency, that the sum of balances equals the sum of deposits, that every transfer has exactly two entries summing to zero, and that every balance equals the sum of its entries. It returns `200` when the books balance and `500` when they don't.
@@ -94,4 +94,14 @@ curl -s localhost:8080/actuator/prometheus | grep '^ledger_'
 
 ## Results
 
-Benchmarks (concurrency, k6 load, optimistic vs pessimistic, outbox under relay failure) are added in milestone 6; see `RESULTS.md`.
+Measured on a MacBook Air M3 (8 cores, 16 GB) with app, Postgres 14.17, Kafka 4.4 and k6 all on the same laptop. Full details, raw data and caveats are in [RESULTS.md](RESULTS.md).
+
+| | result |
+|---|---|
+| Tests | 45 JUnit tests, all passing (Testcontainers: Postgres 14, Kafka 4.4) |
+| Concurrency: 10 × 200,000 transfers, 32 threads, 100 accounts, 5% duplicate keys | **0** invariant violations, **0** duplicate money movements; 797,589 optimistic retries |
+| Load: k6, 60 s per rate, 1,000 accounts | 0% errors up to 4,000 req/s offered; **p99 < 50 ms up to 750 req/s** (26.77 ms); 1000 req/s measured 51.07 ms; saturates at about 2,500–3,200 transfers/s |
+| Locking at 1000 req/s, low / high contention | optimistic p99 36.49 / **120.65 ms** (0.128% gave up); pessimistic p99 22.09 / **8.17 ms**, 0 errors |
+| Outbox, relay `kill -9` mid-run | 30,000 committed = 30,000 published = 30,000 consumed; 0 lost; 0 dedupes needed |
+
+Benchmarks: `bench/run-concurrency.sh`, `bench/run-load.sh`, `bench/run-outbox-kill.sh` (see the end of RESULTS.md).
