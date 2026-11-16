@@ -12,6 +12,20 @@ spring:
   mvc:
     problemdetails:
       enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Wait for all in-sync replicas; idempotent producer = no duplicates from producer retries.
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.block.ms: 5000
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+    consumer:
+      auto-offset-reset: earliest
+    listener:
+      concurrency: 3
 
 management:
   endpoints:
@@ -25,3 +39,14 @@ ledger:
     locking: optimistic
     # Attempts per transfer before giving up with 503 (optimistic mode retries on version conflicts).
     max-attempts: 10
+
+  outbox:
+    relay:
+      # Turn off in the API process to run the relay as its own process.
+      enabled: true
+      poll-interval-ms: 100
+      batch-size: 500
+
+  consumer:
+    # The example downstream consumer (dedupes by event id).
+    enabled: true

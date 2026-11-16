@@ -1,14 +1,20 @@
 package io.github.bytekumar.ledger.transfer;
 
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.github.bytekumar.ledger.account.Account;
 import io.github.bytekumar.ledger.account.AccountNotFoundException;
 import io.github.bytekumar.ledger.account.AccountRepository;
+import io.github.bytekumar.ledger.outbox.OutboxRepository;
+import io.github.bytekumar.ledger.outbox.TransferCompletedEvent;
 import io.github.bytekumar.ledger.transfer.TransferRejectedException.Reason;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -31,16 +37,20 @@ public class TransferService {
 
     private final AccountRepository accounts;
     private final TransferRepository transfers;
+    private final OutboxRepository outbox;
+    private final ObjectMapper json;
     private final TransactionTemplate tx;
     private final int maxAttempts;
     private final LockingMode locking;
     private final Counter versionConflictRetries;
     private final Counter idempotencyRaceRetries;
 
-    public TransferService(AccountRepository accounts, TransferRepository transfers, TransactionTemplate tx,
-                           TransferProperties props, MeterRegistry registry) {
+    public TransferService(AccountRepository accounts, TransferRepository transfers, OutboxRepository outbox,
+                           ObjectMapper json, TransactionTemplate tx, TransferProperties props, MeterRegistry registry) {
         this.accounts = accounts;
         this.transfers = transfers;
+        this.outbox = outbox;
+        this.json = json;
         this.tx = tx;
         this.maxAttempts = props.maxAttempts();
         this.locking = props.locking();
@@ -118,7 +128,21 @@ public class TransferService {
         // 5. Double entry: one debit and one credit that sum to zero.
         accounts.insertEntry(from.id(), -cmd.amount(), from.balance() - cmd.amount(), null, transfer.id());
         accounts.insertEntry(to.id(), cmd.amount(), to.balance() + cmd.amount(), null, transfer.id());
+
+        // 6. Outbox: the event commits or rolls back together with the money movement.
+        writeEvent(transfer);
         return new Outcome(transfer, false);
+    }
+
+    private void writeEvent(Transfer t) {
+        UUID eventId = UUID.randomUUID();
+        TransferCompletedEvent event = new TransferCompletedEvent(eventId, t.id(), t.fromAccountId(), t.toAccountId(),
+                t.amount(), t.currency(), t.createdAt());
+        try {
+            outbox.insert(eventId, TransferCompletedEvent.TYPE, t.id(), json.writeValueAsString(event));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Could not serialize " + event, e);
+        }
     }
 
     private Account read(long id) {
