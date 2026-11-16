@@ -1,5 +1,7 @@
 # ledger-service
 
+[![ci](https://github.com/byteKumar/ledger-service/actions/workflows/ci.yml/badge.svg)](https://github.com/byteKumar/ledger-service/actions/workflows/ci.yml)
+
 A double-entry ledger service: the core of a payments or wallet system. Every transfer debits one account and credits another in a single Postgres transaction, the books always balance, and a client retry never moves money twice.
 
 Java 21 · Spring Boot 3.5 · PostgreSQL 14 · Flyway · Kafka 4 · Micrometer/Prometheus · JUnit 5 + Testcontainers · k6
@@ -98,7 +100,7 @@ Measured on a MacBook Air M3 (8 cores, 16 GB) with app, Postgres 14.17, Kafka 4.
 
 | | result |
 |---|---|
-| Tests | 45 JUnit tests, all passing (Testcontainers: Postgres 14, Kafka 4.4) |
+| Tests | 45 JUnit tests, all passing locally and on GitHub Actions (`mvn verify` on ubuntu-latest, Testcontainers: Postgres 14, Kafka 4.4) |
 | Concurrency: 10 × 200,000 transfers, 32 threads, 100 accounts, 5% duplicate keys | **0** invariant violations, **0** duplicate money movements; 797,589 optimistic retries |
 | Load: k6, 60 s per rate, 1,000 accounts | 0% errors up to 4,000 req/s offered; **p99 < 50 ms up to 750 req/s** (26.77 ms); 1000 req/s measured 51.07 ms; saturates at about 2,500–3,200 transfers/s |
 | Locking at 1000 req/s, low / high contention | optimistic p99 36.49 / **120.65 ms** (0.128% gave up); pessimistic p99 22.09 / **8.17 ms**, 0 errors |

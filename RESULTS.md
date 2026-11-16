@@ -42,6 +42,8 @@ REPO pushed? yes
 
 `mvn test` runs **45 tests, 0 failures** (run after the last code change, against Postgres 14 and Kafka 4.4 in Testcontainers). The benchmark harness is tagged `bench` and is excluded from that count.
 
+**CI:** GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs `mvn verify` on `ubuntu-latest` with Java 21 and the same Testcontainers Postgres 14 and Kafka 4.4 images on every push to `main` and on pull requests. The first run ([43928330494](https://github.com/byteKumar/ledger-service/actions/runs/43928330494), commit `8887c68`) passed: **45 tests, 0 failures**, job time 1 min 15 s. The only difference from local runs: the optimistic high-contention unit test gave up on 495 of 4,000 transfers on the runner (221–404 locally). That number is reported, not asserted, and the books balanced. The benchmarks were not run on CI; all benchmark numbers below are from the laptop.
+
 ## 1. Concurrency test
 
 [`ConcurrencyBenchmark`](src/test/java/io/github/bytekumar/ledger/bench/ConcurrencyBenchmark.java), run with `bench/run-concurrency.sh 10 200000 optimistic`.
