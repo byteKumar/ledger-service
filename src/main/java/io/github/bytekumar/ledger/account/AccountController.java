@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import io.github.bytekumar.ledger.Money;
 import io.github.bytekumar.ledger.account.AccountService.DepositResult;
 import io.github.bytekumar.ledger.account.AccountService.EntryPage;
 import jakarta.validation.Valid;
@@ -38,7 +39,7 @@ public class AccountController {
             @NotNull @Pattern(regexp = "[A-Z]{3}", message = "must be a 3-letter ISO 4217 code") String currency) {
     }
 
-    public record DepositRequest(@NotNull @Positive Long amount) {
+    public record DepositRequest(@NotNull @Positive @Max(Money.MAX_AMOUNT) Long amount) {
     }
 
     @PostMapping

@@ -36,7 +36,7 @@ public class AccountService {
         get(accountId);
         long balanceAfter = accounts.addToBalance(accountId, amount);
         long depositId = accounts.insertDeposit(accountId, amount);
-        accounts.insertDepositEntry(accountId, amount, balanceAfter, depositId);
+        accounts.insertEntry(accountId, amount, balanceAfter, depositId, null);
         return new DepositResult(depositId, accountId, amount, balanceAfter);
     }
 

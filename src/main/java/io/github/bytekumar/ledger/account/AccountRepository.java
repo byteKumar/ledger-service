@@ -11,7 +11,7 @@ import org.springframework.stereotype.Repository;
 public class AccountRepository {
 
     private static final String ACCOUNT_COLUMNS = "id, owner, currency, balance, version, created_at";
-    private static final String ENTRY_COLUMNS = "id, account_id, amount, balance_after, deposit_id, created_at";
+    private static final String ENTRY_COLUMNS = "id, account_id, amount, balance_after, deposit_id, transfer_id, created_at";
 
     private final JdbcClient jdbc;
 
@@ -55,12 +55,28 @@ public class AccountRepository {
                 .single();
     }
 
-    public void insertDepositEntry(long accountId, long amount, long balanceAfter, long depositId) {
-        jdbc.sql("INSERT INTO entries (account_id, amount, balance_after, deposit_id) VALUES (:accountId, :amount, :balanceAfter, :depositId)")
+    /**
+     * Optimistic locking: write the new balance only if nobody changed the row since we
+     * read it (same version). Returns false if we lost the race; the caller rolls back
+     * and retries with fresh data.
+     */
+    public boolean compareAndSetBalance(long accountId, long expectedVersion, long newBalance) {
+        return jdbc.sql("UPDATE accounts SET balance = :balance, version = version + 1 WHERE id = :id AND version = :version")
+                .param("balance", newBalance)
+                .param("id", accountId)
+                .param("version", expectedVersion)
+                .update() == 1;
+    }
+
+    /** Pass exactly one of depositId / transferId; the other is null. */
+    public void insertEntry(long accountId, long amount, long balanceAfter, Long depositId, Long transferId) {
+        jdbc.sql("INSERT INTO entries (account_id, amount, balance_after, deposit_id, transfer_id)"
+                        + " VALUES (:accountId, :amount, :balanceAfter, :depositId, :transferId)")
                 .param("accountId", accountId)
                 .param("amount", amount)
                 .param("balanceAfter", balanceAfter)
                 .param("depositId", depositId)
+                .param("transferId", transferId)
                 .update();
     }
 

@@ -31,6 +31,6 @@ public abstract class IntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
-        jdbc.sql("TRUNCATE accounts, deposits, entries RESTART IDENTITY CASCADE").update();
+        jdbc.sql("TRUNCATE accounts, deposits, transfers, entries RESTART IDENTITY CASCADE").update();
     }
 }
